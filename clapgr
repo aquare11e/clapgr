@@ -1,28 +1,64 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLAPGR_VERSION="0.1.0"
+CLAPGR_VERSION="0.2.0"
 
-if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "clapgr $CLAPGR_VERSION"
-    exit 0
-fi
+# Homebrew casks per release channel
+CASK_STABLE="claude-code"
+CASK_LATEST="claude-code@latest"
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+show_help() {
     cat <<'HELP'
 clapgr - Upgrade claude-code via Homebrew with release notes
 
 Usage: clapgr [options]
 
 Options:
-  -h, --help       Show this help message
-  -v, --version    Show version
+  -h, --help        Show this help message
+  -v, --version     Show version
+  --stable          Switch to the stable channel (Homebrew cask: claude-code)
+  --latest          Switch to the latest channel (Homebrew cask: claude-code@latest)
+  --channel <name>  Switch to a channel: stable | latest
 
-clapgr upgrades claude-code, fetches release notes from GitHub,
-and optionally summarizes them using the Claude CLI.
+With no channel option, clapgr upgrades whichever claude-code cask is
+currently installed. A channel option swaps the Homebrew cask if needed
+(uninstall the other, install the target), then upgrades.
+
+After upgrading, clapgr fetches release notes from GitHub and optionally
+summarizes them using the Claude CLI.
+
+Note: nightly is not available via Homebrew. Install it with npm instead:
+  npm install -g @anthropic-ai/claude-code@nightly
 HELP
-    exit 0
-fi
+}
+
+die() { printf 'Error: %s\n' "$1" >&2; exit 1; }
+
+# --- Resolve channel from args ---
+TARGET_CHANNEL=""   # "", "stable", or "latest"
+
+set_channel() {
+    case "$1" in
+        stable|latest) TARGET_CHANNEL="$1" ;;
+        nightly) die "nightly is not available via Homebrew. Use npm: npm install -g @anthropic-ai/claude-code@nightly" ;;
+        *) die "unknown channel '$1' (valid: stable, latest)" ;;
+    esac
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--version) echo "clapgr $CLAPGR_VERSION"; exit 0 ;;
+        -h|--help)    show_help; exit 0 ;;
+        --stable)     set_channel stable;  shift ;;
+        --latest)     set_channel latest;  shift ;;
+        --nightly)    set_channel nightly ;;  # exits via die with npm hint
+        --channel)
+            shift
+            [[ -n "${1:-}" ]] || die "--channel requires a name (stable | latest)"
+            set_channel "$1"; shift ;;
+        *) die "unknown option '$1' (see --help)" ;;
+    esac
+done
 
 LOG_DIR="${HOME}/.claude-upgrade-logs"
 mkdir -p "$LOG_DIR"
@@ -46,36 +82,81 @@ if ! command -v jq &>/dev/null; then
     exit 1
 fi
 
-# --- Get current version ---
-brew_version() {
-    local ver
-    ver=$(brew list --cask --versions claude-code 2>/dev/null | awk '{print $NF}')
-    if [[ -z "$ver" ]]; then
-        ver=$(brew list --versions claude-code 2>/dev/null | awk '{print $NF}')
-    fi
-    echo "$ver"
+# --- Cask helpers ---
+cask_version() {
+    [[ -n "$1" ]] || return 0
+    brew list --cask --versions "$1" 2>/dev/null | awk '{print $NF}' || true
 }
-OLD_VERSION=$(brew_version)
-if [[ -z "$OLD_VERSION" ]]; then
-    log "${RED}Error: claude-code is not installed via brew.${RESET}"
-    exit 1
-fi
-log "${CYAN}Current version: ${BOLD}${OLD_VERSION}${RESET}"
+cask_installed() { [[ -n "$(cask_version "$1")" ]]; }
 
-# --- Run brew upgrade ---
-log "\n${YELLOW}Running brew upgrade claude-code...${RESET}"
-brew upgrade claude-code 2>&1 | tee -a "$LOG_FILE" || true
+# Which claude-code cask is currently installed (latest takes precedence)
+installed_cask() {
+    if cask_installed "$CASK_LATEST"; then echo "$CASK_LATEST"
+    elif cask_installed "$CASK_STABLE"; then echo "$CASK_STABLE"
+    else echo ""; fi
+}
+channel_cask() {
+    case "$1" in
+        stable) echo "$CASK_STABLE" ;;
+        latest) echo "$CASK_LATEST" ;;
+    esac
+}
+
+CUR_CASK=$(installed_cask)
+SWITCHED=0
+
+if [[ -n "$TARGET_CHANNEL" ]]; then
+    TARGET_CASK=$(channel_cask "$TARGET_CHANNEL")
+    OLD_VERSION=$(cask_version "$CUR_CASK")
+    log "${CYAN}Current version: ${BOLD}${OLD_VERSION:-none}${RESET} ${CYAN}(cask: ${CUR_CASK:-none})${RESET}"
+    log "${CYAN}Target channel:  ${BOLD}${TARGET_CHANNEL}${RESET} ${CYAN}(cask: ${TARGET_CASK})${RESET}"
+
+    if [[ "$CUR_CASK" == "$TARGET_CASK" ]]; then
+        log "\n${YELLOW}Already on ${TARGET_CHANNEL} channel. Running brew upgrade...${RESET}"
+        brew upgrade --cask "$TARGET_CASK" 2>&1 | tee -a "$LOG_FILE" || true
+    else
+        SWITCHED=1
+        if [[ -n "$CUR_CASK" ]]; then
+            log "\n${YELLOW}Switching channel: ${CUR_CASK} -> ${TARGET_CASK}${RESET}"
+            log "${YELLOW}Removing ${CUR_CASK}...${RESET}"
+            brew uninstall --cask "$CUR_CASK" 2>&1 | tee -a "$LOG_FILE" || die "failed to uninstall ${CUR_CASK}"
+        fi
+        log "${YELLOW}Installing ${TARGET_CASK}...${RESET}"
+        brew install --cask "$TARGET_CASK" 2>&1 | tee -a "$LOG_FILE" || die "failed to install ${TARGET_CASK}"
+    fi
+    ACTIVE_CASK="$TARGET_CASK"
+else
+    [[ -n "$CUR_CASK" ]] || { log "${RED}Error: claude-code is not installed via brew.${RESET}"; exit 1; }
+    OLD_VERSION=$(cask_version "$CUR_CASK")
+    log "${CYAN}Current version: ${BOLD}${OLD_VERSION}${RESET} ${CYAN}(cask: ${CUR_CASK})${RESET}"
+    log "\n${YELLOW}Running brew upgrade ${CUR_CASK}...${RESET}"
+    brew upgrade --cask "$CUR_CASK" 2>&1 | tee -a "$LOG_FILE" || true
+    ACTIVE_CASK="$CUR_CASK"
+fi
 
 # --- Get new version ---
-NEW_VERSION=$(brew_version)
+NEW_VERSION=$(cask_version "$ACTIVE_CASK")
 
-if [[ "$OLD_VERSION" == "$NEW_VERSION" ]]; then
+if [[ "$OLD_VERSION" == "$NEW_VERSION" && "$SWITCHED" -eq 0 ]]; then
     log "\n${GREEN}Already up to date: ${BOLD}${OLD_VERSION}${RESET}"
     exit 0
 fi
 
-log "\n${GREEN}${BOLD}claude-code ${OLD_VERSION} -> ${NEW_VERSION}${RESET}"
+if [[ "$SWITCHED" -eq 1 ]]; then
+    log "\n${GREEN}${BOLD}Switched to ${TARGET_CHANNEL} channel: claude-code ${OLD_VERSION:-none} -> ${NEW_VERSION}${RESET}"
+else
+    log "\n${GREEN}${BOLD}claude-code ${OLD_VERSION} -> ${NEW_VERSION}${RESET}"
+fi
 log "Update log saved to: ${LOG_FILE}\n"
+
+# No prior version (fresh install via channel switch): skip the notes diff.
+if [[ -z "$OLD_VERSION" ]]; then
+    log "${YELLOW}Fresh install; skipping release-note diff.${RESET}"
+    log "${CYAN}Release notes: https://github.com/anthropics/claude-code/releases${RESET}"
+    log "\n${GREEN}${BOLD}Update complete: claude-code ${NEW_VERSION} (${TARGET_CHANNEL:-current} channel)${RESET}"
+    log "Full log: ${LOG_FILE}"
+    exit 0
+fi
 
 # --- Fetch release notes from GitHub ---
 log "${YELLOW}Fetching release notes...${RESET}\n"

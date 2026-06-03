@@ -41,9 +41,28 @@ That's it. clapgr will:
 ### Options
 
 ```
--h, --help       Show help message
--v, --version    Show version
+-h, --help        Show help message
+-v, --version     Show version
+--stable          Switch to the stable channel (Homebrew cask: claude-code)
+--latest          Switch to the latest channel (Homebrew cask: claude-code@latest)
+--channel <name>  Switch to a channel: stable | latest
 ```
+
+### Channels
+
+With no channel option, clapgr upgrades whichever `claude-code` cask is currently installed.
+
+A channel option swaps the Homebrew cask if you're not already on it (uninstalls the other, installs the target), then upgrades:
+
+```bash
+clapgr --latest   # switch to the latest (rolling) channel
+clapgr --stable   # switch back to the stable channel
+```
+
+> **Nightly** is not available via Homebrew. Install it with npm instead:
+> ```bash
+> npm install -g @anthropic-ai/claude-code@nightly
+> ```
 
 ## Dependencies
 
