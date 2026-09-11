@@ -64,6 +64,16 @@ clapgr --stable   # switch back to the stable channel
 > npm install -g @anthropic-ai/claude-code@nightly
 > ```
 
+### GitHub API rate limit
+
+Release notes come from the public GitHub API, which allows **60 requests/hour per IP** unauthenticated. When that runs out, clapgr reports the limit and skips the notes (the upgrade itself still happens). Raise the limit to 5000/hour by exporting a token:
+
+```bash
+export GITHUB_TOKEN=$(gh auth token)   # or any personal access token
+```
+
+`GH_TOKEN` works too.
+
 ## Dependencies
 
 - **Required**: bash, curl, jq, Homebrew

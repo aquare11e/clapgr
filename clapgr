@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLAPGR_VERSION="0.2.0"
+CLAPGR_VERSION="0.2.1"
 
 # Homebrew casks per release channel
 CASK_STABLE="claude-code"
@@ -161,7 +161,41 @@ fi
 # --- Fetch release notes from GitHub ---
 log "${YELLOW}Fetching release notes...${RESET}\n"
 
-RELEASES_JSON=$(curl -sL "https://api.github.com/repos/anthropics/claude-code/releases?per_page=50")
+finish() {
+    log "\n${GREEN}${BOLD}Update complete: claude-code ${OLD_VERSION} → ${NEW_VERSION}${RESET}"
+    log "Full log: ${LOG_FILE}"
+    exit 0
+}
+
+notes_unavailable() {
+    log "${YELLOW}Could not fetch release notes: $1${RESET}"
+    log "${CYAN}Check: https://github.com/anthropics/claude-code/releases${RESET}"
+    finish
+}
+
+gh_get() {
+    local -a args=(-sL --max-time 20 -w '\n%{http_code}' -H "Accept: application/vnd.github+json")
+    local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    [[ -n "$token" ]] && args+=(-H "Authorization: Bearer ${token}")
+    curl "${args[@]}" "$1"
+}
+
+RESPONSE=$(gh_get "https://api.github.com/repos/anthropics/claude-code/releases?per_page=50") || \
+    notes_unavailable "network request to api.github.com failed"
+
+HTTP_CODE="${RESPONSE##*$'\n'}"
+RELEASES_JSON="${RESPONSE%$'\n'*}"
+
+# The API answers errors (rate limit, 404, outage) with a JSON object, not an
+# array -- feeding that to `jq '.[].tag_name'` blows up, so validate shape first.
+if [[ "$HTTP_CODE" != "200" ]] || ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$RELEASES_JSON"; then
+    API_MSG=$(jq -r 'if type == "object" then (.message // "unexpected response") else "unexpected response" end' 2>/dev/null <<<"$RELEASES_JSON" || echo "unexpected response")
+    if [[ "$HTTP_CODE" == "403" || "$HTTP_CODE" == "429" ]] && [[ "$API_MSG" == *"rate limit"* ]]; then
+        log "${YELLOW}GitHub API rate limit hit (60 requests/hour unauthenticated).${RESET}"
+        log "${CYAN}Set GITHUB_TOKEN (or GH_TOKEN) to raise the limit: export GITHUB_TOKEN=\$(gh auth token)${RESET}"
+    fi
+    notes_unavailable "HTTP ${HTTP_CODE:-no response} - ${API_MSG}"
+fi
 
 # Extract release notes for versions > OLD and <= NEW
 NOTES=""
@@ -204,5 +238,4 @@ else
     fi
 fi
 
-log "\n${GREEN}${BOLD}Update complete: claude-code ${OLD_VERSION} → ${NEW_VERSION}${RESET}"
-log "Full log: ${LOG_FILE}"
+finish
