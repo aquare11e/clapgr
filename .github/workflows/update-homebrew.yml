@@ -8,12 +8,38 @@ jobs:
   homebrew:
     runs-on: ubuntu-latest
     steps:
-      - name: Update Homebrew formula
-        uses: mislav/bump-homebrew-formula-action@v3
+      - name: Checkout tap
+        uses: actions/checkout@v4
         with:
-          formula-name: clapgr
-          homebrew-tap: aquare11e/homebrew-clapgr
-          tag-name: ${{ github.event.release.tag_name }}
-          download-url: https://github.com/aquare11e/clapgr/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz
+          repository: aquare11e/homebrew-clapgr
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Bump formula
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/aquare11e/clapgr/archive/refs/tags/${TAG}.tar.gz"
+          sha=$(curl -fsSL "$url" | sha256sum | awk '{print $1}')
+          formula="tap/Formula/clapgr.rb"
+          sed -i -E "s|^( *url ).*|\1\"${url}\"|" "$formula"
+          sed -i -E "s|^( *sha256 ).*|\1\"${sha}\"|" "$formula"
+          echo "Bumped clapgr -> ${TAG} (sha256 ${sha})"
+          cat "$formula"
+
+      - name: Commit and push
+        working-directory: tap
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Formula/clapgr.rb; then
+            echo "Formula already up to date; nothing to commit."
+            exit 0
+          fi
+          git add Formula/clapgr.rb
+          git commit -m "Update clapgr to ${TAG}"
+          git push

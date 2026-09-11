@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-09-11
+
+### Fixed
+
+- Release-note fetching crashed with `jq: error ... Cannot index string with string "tag_name"` when the GitHub API answered with an error object instead of an array (most often the 60 req/hour unauthenticated rate limit). The response is now validated (HTTP status + JSON shape) and the API message is reported instead
+
+### Added
+
+- `GITHUB_TOKEN` / `GH_TOKEN` is sent to the GitHub API when set, raising the rate limit from 60 to 5000 requests/hour
+- Rate-limit responses print a hint on how to set a token
+- 20s timeout on the GitHub request; network failures degrade to "release notes unavailable" instead of an opaque error
+
 ## [0.2.0] - 2026-06-03
 
 ### Added
