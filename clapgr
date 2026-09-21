@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLAPGR_VERSION="0.2.1"
+CLAPGR_VERSION="0.2.2"
 
 # Homebrew casks per release channel
 CASK_STABLE="claude-code"
@@ -19,13 +19,18 @@ Options:
   --stable          Switch to the stable channel (Homebrew cask: claude-code)
   --latest          Switch to the latest channel (Homebrew cask: claude-code@latest)
   --channel <name>  Switch to a channel: stable | latest
+  --skip            Upgrade only: no release notes, no summary
+  -b, --background  Detach, write everything to the log file, print its path
 
 With no channel option, clapgr upgrades whichever claude-code cask is
 currently installed. A channel option swaps the Homebrew cask if needed
 (uninstall the other, install the target), then upgrades.
 
 After upgrading, clapgr fetches release notes from GitHub and optionally
-summarizes them using the Claude CLI.
+summarizes them using the Claude CLI. --skip stops right after the upgrade.
+
+--background re-runs clapgr detached from the terminal: the prompt returns
+immediately and all output lands in the log file instead of stdout.
 
 Note: nightly is not available via Homebrew. Install it with npm instead:
   npm install -g @anthropic-ai/claude-code@nightly
@@ -36,6 +41,8 @@ die() { printf 'Error: %s\n' "$1" >&2; exit 1; }
 
 # --- Resolve channel from args ---
 TARGET_CHANNEL=""   # "", "stable", or "latest"
+SKIP_NOTES=0        # --skip: upgrade and nothing else
+BACKGROUND=0        # -b/--background: detach and log to file only
 
 set_channel() {
     case "$1" in
@@ -45,13 +52,18 @@ set_channel() {
     esac
 }
 
+# Kept for the --background re-exec, which replays them minus the flag itself.
+ORIG_ARGS=(${1+"$@"})
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -v|--version) echo "clapgr $CLAPGR_VERSION"; exit 0 ;;
-        -h|--help)    show_help; exit 0 ;;
-        --stable)     set_channel stable;  shift ;;
-        --latest)     set_channel latest;  shift ;;
-        --nightly)    set_channel nightly ;;  # exits via die with npm hint
+        -v|--version)    echo "clapgr $CLAPGR_VERSION"; exit 0 ;;
+        -h|--help)       show_help; exit 0 ;;
+        --stable)        set_channel stable;  shift ;;
+        --latest)        set_channel latest;  shift ;;
+        --nightly)       set_channel nightly ;;  # exits via die with npm hint
+        --skip)          SKIP_NOTES=1; shift ;;
+        -b|--background) BACKGROUND=1; shift ;;
         --channel)
             shift
             [[ -n "${1:-}" ]] || die "--channel requires a name (stable | latest)"
@@ -63,8 +75,28 @@ done
 LOG_DIR="${HOME}/.claude-upgrade-logs"
 mkdir -p "$LOG_DIR"
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="${LOG_DIR}/${TIMESTAMP}.log"
+# A backgrounded run inherits the log path its parent already printed.
+if [[ -n "${CLAPGR_LOG_FILE:-}" ]]; then
+    LOG_FILE="$CLAPGR_LOG_FILE"
+else
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    LOG_FILE="${LOG_DIR}/${TIMESTAMP}.log"
+fi
+
+# --- Background: re-exec detached, then hand the log path back and exit ---
+# Args are parsed above first, so bad input still fails in the foreground.
+if [[ "$BACKGROUND" -eq 1 && -z "${CLAPGR_BACKGROUND:-}" ]]; then
+    FORWARD_ARGS=()
+    for arg in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do
+        [[ "$arg" == "-b" || "$arg" == "--background" ]] && continue
+        FORWARD_ARGS+=("$arg")
+    done
+    CLAPGR_BACKGROUND=1 CLAPGR_LOG_FILE="$LOG_FILE" \
+        nohup "$0" ${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"} >/dev/null 2>&1 &
+    printf 'clapgr running in background (pid %s)\n' "$!"
+    printf 'Log: %s\n' "$LOG_FILE"
+    exit 0
+fi
 
 # --- Colors ---
 GREEN='\033[0;32m'
@@ -149,6 +181,12 @@ else
 fi
 log "Update log saved to: ${LOG_FILE}\n"
 
+finish() {
+    log "\n${GREEN}${BOLD}Update complete: claude-code ${OLD_VERSION} → ${NEW_VERSION}${RESET}"
+    log "Full log: ${LOG_FILE}"
+    exit 0
+}
+
 # No prior version (fresh install via channel switch): skip the notes diff.
 if [[ -z "$OLD_VERSION" ]]; then
     log "${YELLOW}Fresh install; skipping release-note diff.${RESET}"
@@ -158,14 +196,13 @@ if [[ -z "$OLD_VERSION" ]]; then
     exit 0
 fi
 
+if [[ "$SKIP_NOTES" -eq 1 ]]; then
+    log "${YELLOW}Skipping release notes and summary (--skip).${RESET}"
+    finish
+fi
+
 # --- Fetch release notes from GitHub ---
 log "${YELLOW}Fetching release notes...${RESET}\n"
-
-finish() {
-    log "\n${GREEN}${BOLD}Update complete: claude-code ${OLD_VERSION} → ${NEW_VERSION}${RESET}"
-    log "Full log: ${LOG_FILE}"
-    exit 0
-}
 
 notes_unavailable() {
     log "${YELLOW}Could not fetch release notes: $1${RESET}"

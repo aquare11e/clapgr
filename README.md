@@ -46,7 +46,29 @@ That's it. clapgr will:
 --stable          Switch to the stable channel (Homebrew cask: claude-code)
 --latest          Switch to the latest channel (Homebrew cask: claude-code@latest)
 --channel <name>  Switch to a channel: stable | latest
+--skip            Upgrade only: no release notes, no summary
+-b, --background  Detach, write everything to the log file, print its path
 ```
+
+### Upgrade only
+
+`--skip` stops right after the upgrade — no GitHub request, no Claude summary. Useful when you only want the new version, or when the API rate limit is spent:
+
+```bash
+clapgr --skip
+```
+
+### Background
+
+`-b` / `--background` re-runs clapgr detached from the terminal. The prompt comes back immediately, and everything that would have been printed goes to the log file:
+
+```bash
+$ clapgr --background
+clapgr running in background (pid 41288)
+Log: /Users/you/.claude-upgrade-logs/20260921_101134.log
+```
+
+Arguments are forwarded, so `clapgr -b --latest` or `clapgr -b --skip` work as expected. Bad arguments still fail in the foreground, before anything is detached.
 
 ### Channels
 
