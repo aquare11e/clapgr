@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-09-21
+
+### Added
+
+- `--skip` upgrades and stops there: no GitHub release-note request, no Claude summary
+- `-b` / `--background` re-execs clapgr detached from the terminal; the parent prints the log path and returns immediately, and all output goes to the log file. Other arguments are forwarded, and argument validation still happens in the foreground
+
 ## [0.2.1] - 2026-09-11
 
 ### Fixed
