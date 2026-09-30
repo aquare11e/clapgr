@@ -32,9 +32,9 @@ clapgr
 
 That's it. clapgr will:
 
-1. Run `brew upgrade claude-code`
-2. Detect if the version changed
-3. Fetch release notes from GitHub for all versions between old and new
+1. Check whether Homebrew knows of a newer claude-code
+2. Run `brew upgrade claude-code` — and, if an update was detected, fetch release notes from GitHub at the same time
+3. Detect if the version changed and pick out the notes for all versions between old and new
 4. Summarize release notes using `claude` CLI (if available)
 5. Log everything to `~/.claude-upgrade-logs/`
 

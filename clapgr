@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLAPGR_VERSION="0.2.2"
+CLAPGR_VERSION="0.2.3"
 
 # Homebrew casks per release channel
 CASK_STABLE="claude-code"
@@ -134,6 +134,38 @@ channel_cask() {
     esac
 }
 
+# Exit 0 (with output) when brew already knows of a newer version. Uses the
+# local tap state, so it can miss a release that brew upgrade's auto-update finds.
+cask_outdated() { [[ -n "$(brew outdated --cask --quiet "$1" 2>/dev/null || true)" ]]; }
+
+# --- Release notes fetch (runs alongside the upgrade when possible) ---
+RELEASES_URL="https://api.github.com/repos/anthropics/claude-code/releases?per_page=50"
+RELEASES_FILE=$(mktemp "${TMPDIR:-/tmp}/clapgr-releases.XXXXXX")
+FETCH_PID=""
+
+cleanup() {
+    [[ -n "$FETCH_PID" ]] && kill "$FETCH_PID" 2>/dev/null || true
+    rm -f "$RELEASES_FILE"
+}
+trap cleanup EXIT
+
+gh_get() {
+    local -a args=(-sL --max-time 20 -w '\n%{http_code}' -H "Accept: application/vnd.github+json")
+    local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    [[ -n "$token" ]] && args+=(-H "Authorization: Bearer ${token}")
+    curl "${args[@]}" "$1"
+}
+
+fetch_releases() { gh_get "$RELEASES_URL" >"$RELEASES_FILE"; }
+
+# Start the fetch in the background so it overlaps with brew's download.
+start_notes_fetch() {
+    [[ "$SKIP_NOTES" -eq 0 && -z "$FETCH_PID" ]] || return 0
+    log "${CYAN}Fetching release notes in parallel...${RESET}"
+    fetch_releases &
+    FETCH_PID=$!
+}
+
 CUR_CASK=$(installed_cask)
 SWITCHED=0
 
@@ -144,11 +176,14 @@ if [[ -n "$TARGET_CHANNEL" ]]; then
     log "${CYAN}Target channel:  ${BOLD}${TARGET_CHANNEL}${RESET} ${CYAN}(cask: ${TARGET_CASK})${RESET}"
 
     if [[ "$CUR_CASK" == "$TARGET_CASK" ]]; then
+        cask_outdated "$TARGET_CASK" && start_notes_fetch
         log "\n${YELLOW}Already on ${TARGET_CHANNEL} channel. Running brew upgrade...${RESET}"
         brew upgrade --cask "$TARGET_CASK" 2>&1 | tee -a "$LOG_FILE" || true
     else
         SWITCHED=1
+        # Without an old cask this is a fresh install, which skips the notes diff.
         if [[ -n "$CUR_CASK" ]]; then
+            start_notes_fetch
             log "\n${YELLOW}Switching channel: ${CUR_CASK} -> ${TARGET_CASK}${RESET}"
             log "${YELLOW}Removing ${CUR_CASK}...${RESET}"
             brew uninstall --cask "$CUR_CASK" 2>&1 | tee -a "$LOG_FILE" || die "failed to uninstall ${CUR_CASK}"
@@ -161,6 +196,7 @@ else
     [[ -n "$CUR_CASK" ]] || { log "${RED}Error: claude-code is not installed via brew.${RESET}"; exit 1; }
     OLD_VERSION=$(cask_version "$CUR_CASK")
     log "${CYAN}Current version: ${BOLD}${OLD_VERSION}${RESET} ${CYAN}(cask: ${CUR_CASK})${RESET}"
+    cask_outdated "$CUR_CASK" && start_notes_fetch
     log "\n${YELLOW}Running brew upgrade ${CUR_CASK}...${RESET}"
     brew upgrade --cask "$CUR_CASK" 2>&1 | tee -a "$LOG_FILE" || true
     ACTIVE_CASK="$CUR_CASK"
@@ -201,24 +237,26 @@ if [[ "$SKIP_NOTES" -eq 1 ]]; then
     finish
 fi
 
-# --- Fetch release notes from GitHub ---
-log "${YELLOW}Fetching release notes...${RESET}\n"
-
+# --- Collect release notes from GitHub ---
 notes_unavailable() {
     log "${YELLOW}Could not fetch release notes: $1${RESET}"
     log "${CYAN}Check: https://github.com/anthropics/claude-code/releases${RESET}"
     finish
 }
 
-gh_get() {
-    local -a args=(-sL --max-time 20 -w '\n%{http_code}' -H "Accept: application/vnd.github+json")
-    local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-    [[ -n "$token" ]] && args+=(-H "Authorization: Bearer ${token}")
-    curl "${args[@]}" "$1"
-}
-
-RESPONSE=$(gh_get "https://api.github.com/repos/anthropics/claude-code/releases?per_page=50") || \
-    notes_unavailable "network request to api.github.com failed"
+# The parallel fetch only starts when brew knew of the update up front;
+# otherwise (stale taps refreshed by brew upgrade) fetch now.
+FETCH_RC=0
+if [[ -n "$FETCH_PID" ]]; then
+    log "${YELLOW}Waiting for release notes...${RESET}\n"
+    wait "$FETCH_PID" || FETCH_RC=$?
+    FETCH_PID=""
+else
+    log "${YELLOW}Fetching release notes...${RESET}\n"
+    fetch_releases || FETCH_RC=$?
+fi
+[[ "$FETCH_RC" -eq 0 ]] || notes_unavailable "network request to api.github.com failed"
+RESPONSE=$(<"$RELEASES_FILE")
 
 HTTP_CODE="${RESPONSE##*$'\n'}"
 RELEASES_JSON="${RESPONSE%$'\n'*}"
