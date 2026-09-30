@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-09-30
+
+### Changed
+
+- When `brew outdated` already reports a newer claude-code (or a channel switch replaces an installed cask), the GitHub release-note request runs in parallel with the upgrade instead of after it. If the update only shows up once `brew upgrade` refreshes the taps, notes are fetched afterwards as before
+
 ## [0.2.2] - 2026-09-21
 
 ### Added
